@@ -1,0 +1,335 @@
+@import "tailwindcss";
+
+@theme {
+  --color-paper: #eef4f6;
+  --color-ink: #0d1218;
+  --color-accent: #e0944e;
+  --color-muted: #7c8890;
+
+  --font-serif: "Instrument Serif", Georgia, serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+:root { --radius: 2px; }
+
+@theme {
+  --color-primary: var(--color-paper);
+  --color-primary-foreground: var(--color-ink);
+  --color-secondary: color-mix(in srgb, var(--color-paper) 12%, transparent);
+  --color-secondary-foreground: var(--color-paper);
+  --color-accent-foreground: var(--color-paper);
+  --color-destructive: #e0944e;
+  --color-muted-foreground: var(--color-muted);
+  --color-border: color-mix(in srgb, var(--color-paper) 20%, transparent);
+  --color-input: color-mix(in srgb, var(--color-paper) 20%, transparent);
+  --color-ring: var(--color-accent);
+}
+
+@layer base {
+  html, body, #root {
+    height: 100%;
+    background: var(--color-ink);
+    overflow: hidden;
+  }
+  body {
+    overscroll-behavior: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    font-family: var(--font-mono);
+  }
+  :focus-visible {
+    outline: 1px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer components {
+  .glass-shell {
+    --rail: clamp(14px, 2.4vw, 34px);
+    --sill: calc(var(--rail) * 2.1);
+
+    position: relative;
+    width: 100%;
+    height: 100dvh;
+    overflow: hidden;
+    background: var(--color-ink);
+    color: var(--color-paper);
+    cursor: crosshair;
+  }
+
+  .artwork-frame {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    opacity: 0;
+    transition: opacity 700ms ease;
+  }
+  .artwork-frame.is-loaded { opacity: 1; }
+
+  /* the WebGL glass: street + fog + droplets */
+  .glass-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .lens-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    touch-action: none;
+    outline: none;
+    z-index: 3;
+  }
+
+  .window-frame {
+    position: absolute;
+    inset: 0;
+    z-index: 4;
+    pointer-events: none;
+    border-style: solid;
+    border-width: var(--rail) var(--rail) var(--sill) var(--rail);
+    border-color: #1b232c #10161c #050709 #10161c;
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+      inset 0 0 70px 6px rgba(0, 0, 0, 0.6);
+  }
+  /* faint reflection of the room across the glass */
+  .window-frame::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      115deg,
+      rgba(255, 255, 255, 0.06) 0%,
+      rgba(255, 255, 255, 0) 26%,
+      rgba(255, 255, 255, 0) 62%,
+      rgba(255, 255, 255, 0.035) 78%,
+      rgba(255, 255, 255, 0) 100%
+    );
+  }
+  .window-frame .mullion {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: clamp(9px, 1.4vw, 20px);
+    transform: translateX(-50%);
+    background: linear-gradient(90deg, #06090c 0%, #151c24 30%, #1e2832 50%, #151c24 70%, #06090c 100%);
+    box-shadow: 0 0 34px 8px rgba(0, 0, 0, 0.5);
+  }
+  /* sill: a lit top edge where the frame meets the glass */
+  .window-frame::after {
+    content: "";
+    position: absolute;
+    left: calc(var(--rail) * -1);
+    right: calc(var(--rail) * -1);
+    bottom: calc(var(--sill) * -1);
+    height: var(--sill);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.1) 0, rgba(255, 255, 255, 0) 3px);
+  }
+
+  .corner {
+    position: absolute;
+    z-index: 5;
+    pointer-events: none;
+  }
+  .top-left {
+    top: calc(var(--rail) + clamp(10px, 2vw, 26px));
+    left: calc(var(--rail) + clamp(12px, 2.2vw, 30px));
+  }
+  .top-left h1 {
+    margin: 0;
+    font-family: var(--font-serif);
+    font-style: italic;
+    font-weight: 400;
+    font-size: clamp(28px, 4vw, 46px);
+    letter-spacing: 0.01em;
+    color: var(--color-paper);
+    text-shadow: 0 2px 20px var(--color-ink);
+  }
+
+  .controls {
+    position: absolute;
+    z-index: 5;
+    display: flex;
+    gap: 8px;
+    right: calc(var(--rail) + clamp(10px, 2vw, 24px));
+    bottom: calc(var(--sill) + clamp(10px, 2vw, 22px));
+  }
+  .control-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 38px;
+    padding: 0 10px;
+    border: 1px solid color-mix(in oklab, var(--color-paper) 22%, transparent);
+    border-radius: var(--radius);
+    color: var(--color-paper);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.05em;
+    text-shadow: 0 1px 8px var(--color-ink);
+    transition: background-color 200ms ease, border-color 200ms ease;
+  }
+  .control-button:hover {
+    background: color-mix(in oklab, var(--color-paper) 15%, transparent);
+    border-color: color-mix(in oklab, var(--color-paper) 45%, transparent);
+    color: var(--color-paper);
+  }
+  .control-button span {
+    color: var(--color-accent);
+    border: 1px solid currentColor;
+    padding: 1px 4px;
+    margin-left: 6px;
+  }
+  @media (pointer: coarse) {
+    .control-button span { display: none; }
+  }
+
+  .instruction {
+    position: absolute;
+    z-index: 5;
+    left: 50%;
+    bottom: calc(var(--sill) + clamp(20px, 4vh, 44px));
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    padding: 9px 18px 9px 14px;
+    border-radius: 999px;
+    background: rgba(8, 12, 16, 0.42);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 700ms ease;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    color: color-mix(in oklab, var(--color-paper) 92%, transparent);
+    white-space: nowrap;
+  }
+
+  .hint-glyph {
+    position: relative;
+    display: inline-block;
+    flex: none;
+    width: 46px;
+    height: 18px;
+    margin-right: 12px;
+    color: var(--color-paper);
+  }
+  .hint-wipe::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 50%;
+    width: 10px;
+    height: 10px;
+    margin-top: -5px;
+    border: 1px solid currentColor;
+    border-radius: 50%;
+    animation: hint-slide 2.4s ease-in-out infinite;
+  }
+  .hint-wipe::after {
+    content: "";
+    position: absolute;
+    left: 5px;
+    top: 50%;
+    height: 1px;
+    width: 0;
+    background: linear-gradient(90deg, transparent, currentColor);
+    animation: hint-trail 2.4s ease-in-out infinite;
+  }
+  .hint-hold::before {
+    content: "";
+    position: absolute;
+    left: 15px;
+    top: 50%;
+    width: 16px;
+    height: 16px;
+    margin-top: -8px;
+    border: 1px solid var(--color-accent);
+    border-radius: 50%;
+  }
+  .hint-hold::after {
+    content: "";
+    position: absolute;
+    left: 15px;
+    top: 50%;
+    width: 16px;
+    height: 16px;
+    margin-top: -8px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(224, 148, 84, 0.85), rgba(224, 148, 84, 0) 70%);
+    animation: hint-warm 2.2s ease-in-out infinite;
+  }
+  @keyframes hint-slide {
+    0% { transform: translateX(0); opacity: 0; }
+    15% { opacity: 1; }
+    80% { opacity: 1; }
+    100% { transform: translateX(34px); opacity: 0; }
+  }
+  @keyframes hint-trail {
+    0% { width: 0; opacity: 0; }
+    20% { opacity: 0.7; }
+    100% { width: 34px; opacity: 0; }
+  }
+  @keyframes hint-warm {
+    0% { transform: scale(0.2); opacity: 0; }
+    60% { transform: scale(1.5); opacity: 1; }
+    100% { transform: scale(1.7); opacity: 0; }
+  }
+  .instruction.is-visible { opacity: 1; }
+
+  /* dev-only: tells you why your photo isn't showing */
+  .scene-note {
+    position: absolute;
+    z-index: 6;
+    top: calc(var(--rail) + 12px);
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: min(640px, 88%);
+    padding: 10px 14px;
+    border: 1px solid color-mix(in oklab, var(--color-accent) 60%, transparent);
+    border-radius: var(--radius);
+    background: rgba(8, 12, 16, 0.8);
+    color: var(--color-paper);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.5;
+    pointer-events: none;
+  }
+  .scene-note strong { color: var(--color-accent); font-weight: 500; }
+
+  .paper-grain {
+    position: absolute;
+    z-index: 4;
+    inset: 0;
+    opacity: 0.03;
+    pointer-events: none;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.8'/%3E%3C/svg%3E");
+    mix-blend-mode: soft-light;
+  }
+}
+
+@media (max-width: 640px) {
+  .top-left h1 { font-size: 32px; }
+  .instruction { white-space: normal; max-width: 86%; }
+}

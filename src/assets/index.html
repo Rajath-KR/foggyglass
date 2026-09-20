@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Sandglass</title>
+<meta name="description" content="A focus timer made of sand. Tilt it, shake it, flip it.">
+<meta name="theme-color" content="#1a1814">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%8F%B3%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono&display=swap" rel="stylesheet">
+<style>
+:root{--ink:#1a1814;--paper:#f2ede1;--accent:#b7654d;--muted:#8a8377;--serif:"Instrument Serif",Georgia,serif;--mono:"JetBrains Mono",ui-monospace,monospace}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--ink);color:var(--paper);overflow:hidden;font-family:var(--mono);-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none;overscroll-behavior:none;-webkit-font-smoothing:antialiased}
+#cv{position:absolute;left:0;top:0;image-rendering:pixelated;touch-action:none;cursor:grab}
+#cv.drag{cursor:grabbing}
+.ui{position:absolute;z-index:2;left:0;right:0;pointer-events:none;padding:0 clamp(16px,3vw,40px)}
+header{top:0;padding-top:calc(clamp(16px,3vw,34px) + env(safe-area-inset-top,0px));display:flex;justify-content:space-between;align-items:flex-start}
+h1{margin:0;font:400 clamp(40px,7vw,84px)/.8 var(--serif)}
+#count{font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);padding-top:6px}
+.foot{bottom:0;padding-bottom:calc(clamp(14px,3vw,28px) + env(safe-area-inset-bottom,0px));text-align:center}
+#time{font:400 clamp(60px,12vw,132px)/.9 var(--serif);font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+#status{margin:6px 0 18px;min-height:1.4em;font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);transition:opacity .6s}
+.bar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;pointer-events:auto}
+.group{display:flex;gap:6px;flex-wrap:wrap}
+button{font:inherit;font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--paper);background:transparent;border:1px solid rgba(242,237,225,.22);border-radius:2px;padding:0 12px;height:38px;cursor:pointer;transition:background-color .2s,border-color .2s,color .2s}
+button:hover{background:rgba(242,237,225,.12);border-color:rgba(242,237,225,.45)}
+button[aria-pressed=true]{background:var(--paper);color:var(--ink);border-color:var(--paper)}
+#go{background:var(--accent);border-color:var(--accent);color:var(--paper);min-width:96px}
+#go:hover{background:#c97660;border-color:#c97660}
+:focus-visible{outline:1px solid var(--accent);outline-offset:2px}
+kbd{font:inherit;color:var(--accent);border:1px solid currentColor;padding:0 4px;margin-left:6px}
+@media (pointer:coarse){kbd{display:none}}
+@media (max-width:640px){.bar{justify-content:center}}
+</style>
+</head>
+<body>
+<canvas id="cv" aria-label="An hourglass of sand. Drag to tilt gravity, shake to stir."></canvas>
+<header class="ui"><h1>Sandglass</h1><span id="count"></span></header>
+<section class="ui foot">
+  <div id="time" role="timer" aria-live="off">25:00</div>
+  <p id="status">drag to tilt &middot; shake to stir</p>
+  <div class="bar">
+    <div class="group" id="presets" role="group" aria-label="Duration"></div>
+    <div class="group">
+      <button id="go">Start<kbd>space</kbd></button>
+      <button id="sound" aria-pressed="true">Sound<kbd>M</kbd></button>
+      <button id="save">Save<kbd>S</kbd></button>
+    </div>
+  </div>
+</section>
+<script>
+(() => {
+"use strict";
+const $ = (s) => document.querySelector(s);
+const cv = $("#cv"), ctx = cv.getContext("2d");
+const PRESETS = [5, 15, 25, 50];
+const TICK_MS = 1000 / 120;
+const CREAM = [242, 237, 225], RUST = [183, 101, 77];
+const SHADE = [1, 0.9, 0.8, 1.07];
+const DX = [0, 1, 1, 1, 0, -1, -1, -1], DY = [1, 1, 0, -1, -1, -1, 0, 1]; // 0 = down, clockwise
+
+let CELL, GW, GH, y0, ym, y1, half, cxm, maxW;
+let wall, g, stamp, base, img, buf, tickId = 0;
+let mins = 25, dur = mins * 60000;
+let state = "idle"; // idle | run | done
+let startT = 0, G = 1, released = 0, tgt = 0, gateOpen = false;
+let tilt = 0, tiltTarget = 0, dragging = false, dragX0 = 0, stir = 0, stirTarget = 0, lp = null;
+let muted = false, lastText = "", acc = 0, lastFrame = 0, ema = 0, prevReleased = 0;
+
+const pack = (r, gg, b) => (255 << 24) | (b << 16) | (gg << 8) | r;
+const BG = pack(26, 24, 20), IN1 = pack(34, 31, 27), IN2 = pack(30, 28, 24), LINE = pack(150, 145, 133);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const halfW = (y) => Math.round(1.2 + (maxW - 1.2) * Math.pow(Math.sin(Math.min(1, Math.abs((y - ym) / half)) * Math.PI / 2), 0.85));
+const isGate = (x, y) => y === ym && Math.abs(x - cxm) <= 1;
+
+// ---------- world ----------
+function init() {
+  CELL = innerWidth < 600 ? 3 : 4;
+  GW = Math.ceil(innerWidth / CELL); GH = Math.ceil(innerHeight / CELL);
+  cv.width = GW; cv.height = GH;
+  cv.style.width = GW * CELL + "px"; cv.style.height = GH * CELL + "px";
+  const top = Math.round(GH * 0.12) + 6, reserve = Math.max(Math.round(GH * 0.27), Math.round(250 / CELL));
+  half = Math.max(20, Math.floor((GH - top - reserve) / 2));
+  maxW = Math.max(8, Math.min(Math.floor(GW * 0.3), Math.round(half * 0.62)));
+  y0 = top; ym = y0 + half; y1 = ym + half; cxm = GW >> 1;
+  wall = new Uint8Array(GW * GH).fill(1);
+  g = new Uint8Array(GW * GH); stamp = new Uint32Array(GW * GH);
+  for (let y = y0; y <= y1; y++) { const hw = halfW(y); for (let x = cxm - hw; x <= cxm + hw; x++) wall[y * GW + x] = 0; }
+  base = new Uint32Array(GW * GH).fill(BG);
+  for (let y = y0 - 1; y <= y1 + 1; y++) for (let x = cxm - maxW - 1; x <= cxm + maxW + 1; x++) {
+    const i = y * GW + x;
+    if (!wall[i]) base[i] = (x + y) & 1 ? IN1 : IN2;
+    else if (!wall[i - 1] || !wall[i + 1] || !wall[i - GW] || !wall[i + GW]) base[i] = LINE;
+  }
+  img = new ImageData(GW, GH); buf = new Uint32Array(img.data.buffer);
+  fillTop();
+}
+
+function fillTop() {
+  g.fill(0); released = 0; tilt = tiltTarget = 0;
+  let total = 0; for (let y = y0; y < ym; y++) total += 2 * halfW(y) + 1;
+  let n = 0;
+  for (let y = ym - 1; y >= y0 && n < total * 0.55; y--) {
+    const hw = halfW(y);
+    for (let x = cxm - hw; x <= cxm + hw; x++) { g[y * GW + x] = 2 + ((Math.random() * 4) | 0); n++; }
+  }
+  G = Math.max(1, n);
+}
+function countTop() { let n = 0; for (let y = y0; y < ym; y++) for (let x = cxm - maxW; x <= cxm + maxW; x++) if (g[y * GW + x]) n++; return Math.max(1, n); }
+
+// ---------- simulation ----------
+function canEnter(nx, ny) {
+  if (nx < 0 || ny < 0 || nx >= GW || ny >= GH) return false;
+  const j = ny * GW + nx;
+  return !wall[j] && !g[j] && (gateOpen || !isGate(nx, ny));
+}
+function move(i, x, y, dx, dy, v) {
+  const nx = x + dx, ny = y + dy;
+  if (!canEnter(nx, ny)) return false;
+  const j = ny * GW + nx;
+  g[j] = v; g[i] = 0; stamp[j] = tickId;
+  if (isGate(nx, ny) && dy > 0) { released++; if (tgt - released < 1) gateOpen = false; }
+  return true;
+}
+function tick() {
+  tickId++;
+  gateOpen = tgt - released >= 1;
+  const k = ((Math.round(tilt / (Math.PI / 4)) % 8) + 8) % 8, a = (k + 1) & 7, b = (k + 7) & 7;
+  const pdx = DX[k], pdy = DY[k];
+  const yDown = pdy > 0, xDesc = pdx > 0 || (pdx === 0 && (tickId & 1) === 0);
+  for (let yy = y0; yy <= y1; yy++) {
+    const y = yDown ? y1 - (yy - y0) : yy;
+    for (let xx = -maxW; xx <= maxW; xx++) {
+      const x = cxm + (xDesc ? maxW - (xx + maxW) : xx);
+      const i = y * GW + x, v = g[i];
+      if (!v || stamp[i] === tickId) continue;
+      if (move(i, x, y, pdx, pdy, v)) continue;
+      const f = Math.random() < 0.5;
+      if (move(i, x, y, DX[f ? a : b], DY[f ? a : b], v) || move(i, x, y, DX[f ? b : a], DY[f ? b : a], v)) continue;
+      // resting on a wall (not on other sand): slide along it, so nothing locks on the funnel
+      if (wall[(y + pdy) * GW + x + pdx]) { const c = (k + 2) & 7, d = (k + 6) & 7; if (!move(i, x, y, DX[f ? c : d], DY[f ? c : d], v)) move(i, x, y, DX[f ? d : c], DY[f ? d : c], v); }
+    }
+  }
+  if (stir > 0.05) {
+    const n = (stir * 500) | 0;
+    for (let s = 0; s < n; s++) {
+      const x = cxm - maxW + ((Math.random() * (2 * maxW + 1)) | 0), y = y0 + ((Math.random() * (y1 - y0 + 1)) | 0), i = y * GW + x;
+      if (!g[i] || stamp[i] === tickId) continue;
+      const d = (Math.random() * 8) | 0;
+      move(i, x, y, DX[d], DY[d], g[i]);
+    }
+  }
+}
+function mirror() {
+  for (let y = y0; y < ym; y++) { const y2 = 2 * ym - y; for (let x = cxm - maxW; x <= cxm + maxW; x++) { const i = y * GW + x, j = y2 * GW + x, t = g[i]; g[i] = g[j]; g[j] = t; } }
+}
+
+// ---------- timer ----------
+function begin() { state = "run"; startT = Date.now(); released = 0; G = countTop(); setStatus("pouring"); }
+function startOrFlip() {
+  audioStart();
+  if (state === "idle") return begin();
+  mirror(); begin(); navigator.vibrate?.(10);
+}
+function setPreset(m) { mins = m; dur = m * 60000; state = "idle"; fillTop(); tgt = 0; setStatus("drag to tilt \u00b7 shake to stir"); ui(); }
+function finish() {
+  state = "done"; chime(); navigator.vibrate?.([30, 60, 30]);
+  try { const k = "sandglass:" + new Date().toDateString(); localStorage.setItem(k, String(+(localStorage.getItem(k) || 0) + 1)); } catch (e) {}
+  setStatus("time. flip to go again"); ui();
+}
+function today() { try { return +(localStorage.getItem("sandglass:" + new Date().toDateString()) || 0); } catch (e) { return 0; } }
+const fmt = (ms) => { const s = Math.max(0, Math.ceil(ms / 1000)); return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0"); };
+function setStatus(t) { $("#status").textContent = t; }
+
+// ---------- audio ----------
+let ac, master, hiss;
+function audioStart() {
+  if (ac) { if (ac.state === "suspended") ac.resume(); return; }
+  const C = window.AudioContext || window.webkitAudioContext; if (!C) return;
+  ac = new C(); master = ac.createGain(); master.gain.value = muted ? 0 : 1; master.connect(ac.destination);
+  const buffer = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate), d = buffer.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  const src = ac.createBufferSource(); src.buffer = buffer; src.loop = true;
+  const bp = ac.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 2600; bp.Q.value = 0.8;
+  hiss = ac.createGain(); hiss.gain.value = 0;
+  src.connect(bp); bp.connect(hiss); hiss.connect(master); src.start();
+}
+function chime() {
+  if (!ac || muted) return;
+  [523.25, 783.99, 1046.5].forEach((f, i) => {
+    const o = ac.createOscillator(), gn = ac.createGain(), t = ac.currentTime + i * 0.18;
+    o.frequency.value = f; gn.gain.setValueAtTime(0.0001, t);
+    gn.gain.exponentialRampToValueAtTime(0.16, t + 0.02); gn.gain.exponentialRampToValueAtTime(0.0001, t + 2.6);
+    o.connect(gn); gn.connect(master); o.start(t); o.stop(t + 2.7);
+  });
+}
+
+// ---------- render ----------
+function render(p) {
+  const pal = [0, 0];
+  for (let s = 0; s < 4; s++) { const f = SHADE[s]; pal.push(pack(...[0, 1, 2].map((c) => clamp(Math.round((CREAM[c] + (RUST[c] - CREAM[c]) * p) * f), 0, 255)))); }
+  buf.set(base);
+  for (let y = y0; y <= y1; y++) for (let x = cxm - maxW; x <= cxm + maxW; x++) { const i = y * GW + x, v = g[i]; if (v) buf[i] = pal[v]; }
+  ctx.putImageData(img, 0, 0);
+}
+function ui() {
+  $("#go").firstChild.nodeValue = state === "idle" ? "Start" : "Flip";
+  document.querySelectorAll("#presets button").forEach((b) => b.setAttribute("aria-pressed", String(+b.dataset.m === mins)));
+  const n = today(); $("#count").textContent = n ? n + " session" + (n > 1 ? "s" : "") + " today" : "";
+}
+
+function frame(now) {
+  const dt = Math.min(100, now - (lastFrame || now)); lastFrame = now;
+  // timer
+  let p = 0, text = fmt(dur);
+  if (state === "run") {
+    const el = Date.now() - startT; p = clamp(el / dur, 0, 1); text = fmt(dur - el);
+    tgt = el >= dur ? Infinity : G * el / dur;
+    if (el >= dur) finish();
+  } else if (state === "done") { p = 1; text = "00:00"; tgt = Infinity; } else tgt = 0;
+  if (text !== lastText) { lastText = text; $("#time").textContent = text; document.title = state === "idle" ? "Sandglass" : text + " \u00b7 Sandglass"; }
+  // input smoothing
+  tilt += (tiltTarget - tilt) * 0.12; stirTarget *= 0.9; stir += (stirTarget - stir) * 0.25;
+  // simulation
+  acc += dt; let steps = 0; while (acc >= TICK_MS && steps < 6) { tick(); acc -= TICK_MS; steps++; } if (steps === 6) acc = 0;
+  // sound follows the sand
+  const flow = released - prevReleased; prevReleased = released;
+  ema += (flow * 60 - ema) * 0.1;
+  if (hiss) hiss.gain.setTargetAtTime(Math.min(0.1, ema * 0.004) + stir * 0.05, ac.currentTime, 0.08);
+  render(p);
+  requestAnimationFrame(frame);
+}
+
+// ---------- input ----------
+cv.addEventListener("pointerdown", (e) => { cv.setPointerCapture(e.pointerId); audioStart(); dragging = true; dragX0 = e.clientX; lp = { x: e.clientX, y: e.clientY, t: performance.now() }; cv.classList.add("drag"); });
+cv.addEventListener("pointermove", (e) => {
+  if (!dragging) return;
+  tiltTarget = clamp((e.clientX - dragX0) / (innerWidth * 0.28), -1, 1) * Math.PI / 2;
+  const t = performance.now(), sp = Math.hypot(e.clientX - lp.x, e.clientY - lp.y) / Math.max(1, t - lp.t);
+  stirTarget = Math.max(stirTarget, clamp((sp - 0.8) / 2, 0, 1)); lp = { x: e.clientX, y: e.clientY, t };
+});
+const up = () => { dragging = false; tiltTarget = 0; cv.classList.remove("drag"); };
+cv.addEventListener("pointerup", up); cv.addEventListener("pointercancel", up);
+addEventListener("keydown", (e) => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if (k === " " && document.activeElement?.tagName !== "BUTTON") { e.preventDefault(); startOrFlip(); }
+  else if (k === "m") toggleSound(); else if (k === "s") save();
+  else if (k >= "1" && k <= "4") setPreset(PRESETS[+k - 1]);
+});
+function toggleSound() { muted = !muted; $("#sound").setAttribute("aria-pressed", String(!muted)); if (master) master.gain.setTargetAtTime(muted ? 0 : 1, ac.currentTime, 0.03); }
+
+function save() {
+  const W = 1080, H = 1350, c = document.createElement("canvas"); c.width = W; c.height = H;
+  const k = c.getContext("2d"); k.fillStyle = "#1a1814"; k.fillRect(0, 0, W, H);
+  const pad = maxW + 3, sx = cxm - pad, sw = pad * 2 + 1, sy = y0 - 2, sh = y1 - y0 + 5, sc = Math.min(760 / sw, 880 / sh);
+  k.imageSmoothingEnabled = false; k.drawImage(cv, sx, sy, sw, sh, (W - sw * sc) / 2, 130, sw * sc, sh * sc);
+  k.fillStyle = "#f2ede1"; k.textAlign = "center";
+  k.font = 'italic 92px "Instrument Serif", Georgia, serif'; k.fillText(mins + " minutes", W / 2, H - 170);
+  k.fillStyle = "#8a8377"; k.font = '26px "JetBrains Mono", monospace';
+  k.fillText("SANDGLASS \u00b7 " + new Date().toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" }).toUpperCase(), W / 2, H - 100);
+  c.toBlob((blob) => { if (!blob) return; const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "sandglass.png"; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); });
+}
+
+// ---------- boot ----------
+PRESETS.forEach((m) => { const b = document.createElement("button"); b.textContent = m + " min"; b.dataset.m = m; b.addEventListener("click", () => setPreset(m)); $("#presets").append(b); });
+$("#go").addEventListener("click", startOrFlip); $("#sound").addEventListener("click", toggleSound); $("#save").addEventListener("click", save);
+let lastW = innerWidth, lastH = innerHeight;
+addEventListener("resize", () => { // ignore small height changes (mobile URL bar)
+  if (innerWidth === lastW && Math.abs(innerHeight - lastH) < 120) return;
+  lastW = innerWidth; lastH = innerHeight; init(); if (state !== "idle") { const s = state; if (s === "run") G = countTop(); }
+});
+document.addEventListener("visibilitychange", () => { lastFrame = 0; acc = 0; });
+init(); ui(); requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
